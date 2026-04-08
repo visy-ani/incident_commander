@@ -43,13 +43,14 @@ def test_run_task_handles_env_startup_failures_without_crashing(monkeypatch, cap
 
     assert summary["success"] is False
     assert summary["steps"] == 0
-    assert summary["score"] == 0.0
+    assert summary["score"] == 0.001
     assert summary["error"] == "docker exited with status 125"
 
     stdout_lines = [line for line in capsys.readouterr().out.splitlines() if line]
     assert len(stdout_lines) == 2
     assert stdout_lines[0].startswith("[START]")
     assert stdout_lines[1].startswith("[END] success=false")
+    assert "score=0.001" in stdout_lines[1]
 
 
 def test_main_ignores_summary_write_failures(monkeypatch):

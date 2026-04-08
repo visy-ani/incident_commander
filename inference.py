@@ -185,6 +185,10 @@ def normalize_error(exc: Exception) -> str:
     return " ".join(str(exc).split()) or exc.__class__.__name__
 
 
+def bounded_output_score(score: float) -> float:
+    return round(min(0.999, max(0.001, score)), 4)
+
+
 def env_url_candidates() -> list[str]:
     candidates: list[str] = []
     for candidate in [ENV_BASE_URL, *DEFAULT_ENV_URL_CANDIDATES]:
@@ -425,13 +429,18 @@ async def run_task(client: OpenAI, task_id: str) -> dict[str, Any]:
                 await env.close()
             except Exception:
                 pass
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        log_end(
+            success=success,
+            steps=steps_taken,
+            score=bounded_output_score(score),
+            rewards=rewards,
+        )
 
     return {
         "task_id": task_id,
         "success": success,
         "steps": steps_taken,
-        "score": round(score, 4),
+        "score": bounded_output_score(score),
         "rewards": rewards,
         "mode": "scripted" if USE_SCRIPTED else "model",
         "model": "scripted-fallback" if USE_SCRIPTED else MODEL_NAME,

@@ -60,6 +60,7 @@ class IncidentCommanderEnvironment(
     """Simulates real-world incident commander workflows across three tasks."""
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = False
+    FINAL_SCORE_EPSILON: float = 0.001
 
     def __init__(self, default_task_id: str = TASK_ORDER[0]) -> None:
         super().__init__()
@@ -68,6 +69,13 @@ class IncidentCommanderEnvironment(
         self._state = IncidentCommanderState(
             episode_id=str(uuid4()),
             step_count=0,
+        )
+
+    @classmethod
+    def _exclusive_final_score(cls, score: float) -> float:
+        return round(
+            min(1.0 - cls.FINAL_SCORE_EPSILON, max(cls.FINAL_SCORE_EPSILON, score)),
+            4,
         )
 
     def reset(
@@ -130,7 +138,8 @@ class IncidentCommanderEnvironment(
             )
             done = True
 
-        self._runtime.final_score = score
+        final_score = self._exclusive_final_score(score) if done else score
+        self._runtime.final_score = final_score
         self._state = IncidentCommanderState(
             episode_id=self._state.episode_id,
             step_count=self._state.step_count,
@@ -141,7 +150,7 @@ class IncidentCommanderEnvironment(
             max_steps=self._runtime.spec.max_steps,
             timeline_min=self._runtime.timeline_min,
             partial_score=score,
-            final_score=score if done else 0.0,
+            final_score=final_score if done else 0.0,
             completed_milestones=completed_titles(self._runtime),
             remaining_milestones=remaining_titles(self._runtime),
             penalties=list(self._runtime.penalties),
@@ -184,6 +193,7 @@ class IncidentCommanderEnvironment(
         ]
 
         score = current_score(self._runtime)
+        final_score = self._exclusive_final_score(score) if done else None
         return IncidentCommanderObservation(
             task_id=self._runtime.spec.task_id,
             task_title=self._runtime.spec.title,
@@ -201,7 +211,7 @@ class IncidentCommanderEnvironment(
             last_action_result=self._runtime.last_action_result,
             last_action_error=self._runtime.last_action_error,
             partial_score=score,
-            final_score=score if done else None,
+            final_score=final_score,
             remaining_steps=max(self._runtime.spec.max_steps - self._state.step_count, 0),
             done=done,
             reward=reward,

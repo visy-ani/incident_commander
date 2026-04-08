@@ -31,7 +31,7 @@ def test_easy_task_reaches_perfect_score():
 
     assert result is not None
     assert result.done is True
-    assert result.final_score == 1.0
+    assert result.final_score == 0.999
 
 
 def test_medium_task_penalizes_wrong_remediation():
@@ -88,4 +88,4 @@ def test_hard_task_requires_two_remediations():
 
     assert result is not None
     assert result.done is True
-    assert result.final_score == 1.0
+    assert result.final_score == 0.999
