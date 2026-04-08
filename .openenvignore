@@ -1,0 +1,4 @@
+outputs/
+openenv_incident_commander.egg-info/
+__pycache__/
+*.pyc
