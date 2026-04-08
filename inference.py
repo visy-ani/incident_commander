@@ -106,14 +106,20 @@ SCRIPTED_PLANS: dict[str, list[dict[str, Any]]] = {
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
-LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME", "incident-commander-env:latest")
+HF_TOKEN = os.getenv("HF_TOKEN")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 ENV_BASE_URL = os.getenv("INCIDENT_COMMANDER_ENV_URL")
 BENCHMARK = os.getenv("INCIDENT_COMMANDER_BENCHMARK", "incident_commander")
 TEMPERATURE = 0.0
 MAX_TOKENS = 240
 SUCCESS_SCORE_THRESHOLD = 0.75
-USE_SCRIPTED = os.getenv("INCIDENT_COMMANDER_USE_SCRIPTED_BASELINE") == "1" or not API_KEY
+USE_SCRIPTED = os.getenv("INCIDENT_COMMANDER_USE_SCRIPTED_BASELINE") == "1" or not HF_TOKEN
+DEFAULT_ENV_URL_CANDIDATES = (
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8010",
+    "http://localhost:8010",
+)
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
@@ -173,6 +179,18 @@ def compact_action(action: IncidentCommanderAction) -> str:
         action.model_dump(exclude_none=True, exclude_defaults=True),
         separators=(",", ":"),
     )
+
+
+def normalize_error(exc: Exception) -> str:
+    return " ".join(str(exc).split()) or exc.__class__.__name__
+
+
+def env_url_candidates() -> list[str]:
+    candidates: list[str] = []
+    for candidate in [ENV_BASE_URL, *DEFAULT_ENV_URL_CANDIDATES]:
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
 
 
 def build_user_prompt(
@@ -312,11 +330,34 @@ def pick_action(
 
 
 async def create_env() -> IncidentCommanderEnv:
-    if ENV_BASE_URL:
-        env = IncidentCommanderEnv(base_url=ENV_BASE_URL)
-        await env.connect()
-        return env
-    return await IncidentCommanderEnv.from_docker_image(LOCAL_IMAGE_NAME)
+    connection_errors: list[str] = []
+
+    for base_url in env_url_candidates():
+        env = IncidentCommanderEnv(base_url=base_url)
+        try:
+            await env.connect()
+            return env
+        except Exception as exc:
+            connection_errors.append(f"{base_url}: {normalize_error(exc)}")
+            try:
+                await env.close()
+            except Exception:
+                pass
+
+    if LOCAL_IMAGE_NAME:
+        try:
+            return await IncidentCommanderEnv.from_docker_image(LOCAL_IMAGE_NAME)
+        except Exception as exc:
+            connection_errors.append(
+                f"docker image {LOCAL_IMAGE_NAME}: {normalize_error(exc)}"
+            )
+
+    detail = (
+        "; ".join(connection_errors)
+        if connection_errors
+        else "no reachable environment URL found and LOCAL_IMAGE_NAME was not set"
+    )
+    raise RuntimeError(f"Unable to start Incident Commander environment: {detail}")
 
 
 async def run_task(client: OpenAI, task_id: str) -> dict[str, Any]:
@@ -326,6 +367,7 @@ async def run_task(client: OpenAI, task_id: str) -> dict[str, Any]:
     score = 0.0
     success = False
     result = None
+    error_message: str | None = None
 
     model_label = "scripted-fallback" if USE_SCRIPTED else MODEL_NAME
     log_start(task=task_id, env=BENCHMARK, model=model_label)
@@ -374,6 +416,8 @@ async def run_task(client: OpenAI, task_id: str) -> dict[str, Any]:
                 else result.observation.partial_score
             )
         success = bool(result and result.done and score >= SUCCESS_SCORE_THRESHOLD)
+    except Exception as exc:
+        error_message = normalize_error(exc)
 
     finally:
         if env is not None:
@@ -391,6 +435,7 @@ async def run_task(client: OpenAI, task_id: str) -> dict[str, Any]:
         "rewards": rewards,
         "mode": "scripted" if USE_SCRIPTED else "model",
         "model": "scripted-fallback" if USE_SCRIPTED else MODEL_NAME,
+        "error": error_message,
     }
 
 
@@ -401,15 +446,18 @@ async def main() -> None:
         if tasks_raw
         else DEFAULT_TASKS
     )
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY or "missing")
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "missing")
 
     summaries = []
     for task_id in tasks:
         summaries.append(await run_task(client, task_id))
 
     output_path = Path(__file__).resolve().parent / "outputs" / "inference_summary.json"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps({"results": summaries}, indent=2), encoding="utf-8")
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps({"results": summaries}, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

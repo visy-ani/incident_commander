@@ -8,6 +8,9 @@
 set -uo pipefail
 
 DOCKER_BUILD_TIMEOUT=600
+VERBOSE_DOCKER_BUILD="${VERBOSE_DOCKER_BUILD:-0}"
+DOCKER_BUILDKIT_VALUE="${DOCKER_BUILDKIT:-1}"
+BUILDKIT_PROGRESS_VALUE="${BUILDKIT_PROGRESS:-plain}"
 if [ -t 1 ]; then
   RED='\033[0;31m'
   GREEN='\033[0;32m'
@@ -117,13 +120,27 @@ else
 fi
 
 BUILD_OK=false
-BUILD_OUTPUT=$(run_with_timeout "$DOCKER_BUILD_TIMEOUT" docker build "$DOCKER_CONTEXT" 2>&1) && BUILD_OK=true
+BUILD_LOG=$(portable_mktemp "validate-docker-build")
+CLEANUP_FILES+=("$BUILD_LOG")
+
+if [ "$VERBOSE_DOCKER_BUILD" = "1" ]; then
+  hint "Streaming docker build logs because VERBOSE_DOCKER_BUILD=1"
+  run_with_timeout "$DOCKER_BUILD_TIMEOUT" \
+    env DOCKER_BUILDKIT="$DOCKER_BUILDKIT_VALUE" BUILDKIT_PROGRESS="$BUILDKIT_PROGRESS_VALUE" \
+    docker build "$DOCKER_CONTEXT" 2>&1 | tee "$BUILD_LOG"
+  BUILD_RC=${PIPESTATUS[0]}
+  [ "$BUILD_RC" -eq 0 ] && BUILD_OK=true
+else
+  BUILD_OUTPUT=$(run_with_timeout "$DOCKER_BUILD_TIMEOUT" docker build "$DOCKER_CONTEXT" 2>&1) && BUILD_OK=true
+  printf "%s\n" "$BUILD_OUTPUT" >"$BUILD_LOG"
+fi
 
 if [ "$BUILD_OK" = true ]; then
   pass "Docker build succeeded"
 else
   fail "Docker build failed (timeout=${DOCKER_BUILD_TIMEOUT}s)"
-  printf "%s\n" "$BUILD_OUTPUT" | tail -20
+  hint "Set VERBOSE_DOCKER_BUILD=1 to stream detailed docker build logs."
+  tail -20 "$BUILD_LOG"
   stop_at "Step 2"
 fi
 
